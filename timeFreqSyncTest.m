@@ -7,7 +7,7 @@ blockLength = 500;
 dataBlockCount = 10;
 sampleRate = 200e3;
 toneFreq = 50e3;
-freqError = 1e3;
+freqError = 10e3;
 snrDbRange = -20:2:20;
 seedCount = 1000;
 
@@ -48,14 +48,44 @@ for snrDbIdx = 1:length(snrDbRange)
         rxSignal = rxSignal + noise * db2mag(-snrDb);
         
         %% Synchronization
+        % Phase Difference Calculation
+        phaseDifferences = angle(rxSignal(2:length(rxSignal)) .* conj(rxSignal(1:length(rxSignal)-1)));
+        
+        % Calculate moving average of phaseDifferences using a window size equal to length of freqSeq
+        windowSize = length(freqSeq);
+        movingAvg = movmean([zeros(1, windowSize), phaseDifferences, zeros(1, windowSize)], windowSize);
+        
+        % Peak movingAvg finding
+        [~,movingAvgMaxIdx] = max(abs(movingAvg));
+        
+        % Skip it if we went out of the array rxSignal
+        if ( movingAvgMaxIdx + windowSize/2 > length(rxSignal))
+            syncFailed(seedIdx, snrDbIdx) = 1;
+            continue;
+        end
+        
+        % FFT Analysis
+        fftLength = movingAvgMaxIdx - windowSize/2;
+        fftAmplitudeSignal = abs(fft(rxSignal(1:fftLength)));
+        
+        % Peak fft signal finding
+        [~, fftAmplitudeSignalMaxIdx] = max(fftAmplitudeSignal);
+        
+        % Finding the shift
+        fftFrequencies = (0:fftLength-1) * (sampleRate / fftLength);
+        frequencyShift = fftFrequencies(fftAmplitudeSignalMaxIdx) - toneFreq;
+        
+        % Frequency compensation
+        rxSignal = rxSignal .* exp(1j*2*pi*(-frequencyShift)/sampleRate*(1:length(rxSignal)));
+        
         % Correlation
         correlation = conv(rxSignal, conj(synchSeq(end:-1:1)));
         
-        % Peak finding
-        [~,maxIdx] = max(abs(correlation));
+        % Peak correlation finding
+        [~,correlationMaxIdx] = max(abs(correlation));
         
         % Finding sync start
-        syncStart = maxIdx - length(synchSeq) + 1;
+        syncStart = correlationMaxIdx - length(synchSeq) + 1;
         
         % Calculate squared timing error compared to reference sync start
         refSyncStart = length(freqSeq) + 1;
